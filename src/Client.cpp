@@ -591,6 +591,22 @@ bool CClient::PutClient(const CMessage& Message) {
     switch (Message.GetType()) {
         case CMessage::Type::Away:
             if (!m_bAwayNotify) return false;
+
+            // Do not send away-message if all shared channels are detached.
+            if (m_pNetwork) {
+                const CString& sAwayNick = Message.GetNick().GetNick();
+                bool bHasSharedChannel = false;
+
+                const vector<CChan*>& vChans = m_pNetwork->GetChans();
+                for (const CChan* pChan : vChans) {
+                    if (!pChan->IsDetached() && pChan->FindNick(sAwayNick)) {
+                        bHasSharedChannel = true;
+                        break;
+                    }
+                }
+
+                if (!bHasSharedChannel) return false;
+            }
             break;
         case CMessage::Type::Account:
             if (!m_bAccountNotify) return false;
@@ -603,6 +619,25 @@ bool CClient::PutClient(const CMessage& Message) {
                 !CNick(Message.As<CInviteMessage>().GetInvitedNick())
                      .NickEquals(m_sNick)) {
                 return false;
+            }
+            break;
+        case CMessage::Type::ChgHost:
+            if (!m_bChgHost) return false;
+
+            // Do not send chghost if all shared channels are detached.
+            if (m_pNetwork) {
+                const CString& sChgHost = Message.GetNick().GetNick();
+                bool bHasSharedChannel = false;
+
+                const vector<CChan*>& vChans = m_pNetwork->GetChans();
+                for (const CChan* pChan : vChans) {
+                    if (!pChan->IsDetached() && pChan->FindNick(sChgHost)) {
+                        bHasSharedChannel = true;
+                        break;
+                    }
+                }
+
+                if (!bHasSharedChannel) return false;
             }
             break;
         default:

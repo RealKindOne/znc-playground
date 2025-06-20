@@ -16,6 +16,7 @@
 
 #include <znc/IRCNetwork.h>
 #include <znc/IRCSock.h>
+#include <znc/User.h>
 #include <algorithm>
 
 #define NV_REQUIRE_AUTH "require_auth"
@@ -53,8 +54,9 @@ class CSASLMod : public CModule {
     } SupportedMechanisms[2] = {
         {"EXTERNAL", t_d("TLS certificate, for use with the *cert module"),
          true},
-        {"PLAIN", t_d("Plain text negotiation, this should work always if the "
-                      "network supports SASL"),
+        {"PLAIN",
+         t_d("Plain text negotiation, this should work always if the "
+             "network supports SASL"),
          true}};
 
   public:
@@ -69,6 +71,8 @@ class CSASLMod : public CModule {
         AddCommand("Mechanism", t_d("[mechanism[ ...]]"),
                    t_d("Set the mechanisms to be attempted (in order)"),
                    [=](const CString& sLine) { SetMechanismCommand(sLine); });
+        AddCommand("Reauth", "", t_d("Re-authenticate using SASL"),
+                   [=](const CString& sLine) { ReauthCommand(sLine); });
         AddCommand("RequireAuth", t_d("[yes|no]"),
                    t_d("Don't connect unless SASL authentication succeeds"),
                    [=](const CString& sLine) { RequireAuthCommand(sLine); });
@@ -79,6 +83,7 @@ class CSASLMod : public CModule {
                    });
 
         m_bAuthenticated = false;
+        m_bReauthInProgress = false;
     }
 
     void PrintHelp(const CString& sLine) {
@@ -137,6 +142,44 @@ class CSASLMod : public CModule {
                     PutModule("Unsupported mechanism: " + sMechanism);
                     return;
                 }
+
+                // Check if EXTERNAL mechanism is being set
+                if (sMechanism.Equals("EXTERNAL")) {
+                    CModule* pCertMod = nullptr;
+
+                    // Check for certificate at network level.
+                    pCertMod = GetNetwork()->GetModules().FindModule("cert");
+
+                    // Check for certificate at user level if not loaded at
+                    // network level.
+                    if (!pCertMod) {
+                        pCertMod =
+                            GetNetwork()->GetUser()->GetModules().FindModule(
+                                "cert");
+                    }
+
+                    if (!pCertMod) {
+                        PutModule(
+                            "Warning: EXTERNAL mechanism requires the 'cert' "
+                            "module to be loaded as either a user or network "
+                            "module for client certificate authentication.");
+                    } else {
+                        // Check if cert module has a user.pem file and print
+                        // its location
+                        CString sPemFile =
+                            pCertMod->GetSavePath() + "/user.pem";
+                        if (CFile::Exists(sPemFile)) {
+                            PutModule("Certificate file location: " + sPemFile);
+                        } else {
+                            PutModule(
+                                "Warning: EXTERNAL mechanism requires a "
+                                "certificate file. The cert module has no "
+                                "user.pem file. Use the cert module's web "
+                                "interface or place a certificate at: " +
+                                sPemFile);
+                        }
+                    }
+                }
             }
 
             SetNV(NV_MECHANISMS, sMechanisms);
@@ -165,6 +208,40 @@ class CSASLMod : public CModule {
         }
 
         return false;
+    }
+    void ReauthCommand(const CString& sLine) {
+        if (!GetNetwork()->IsIRCConnected()) {
+            PutModule(t_s("Not connected to IRC server"));
+            return;
+        }
+
+        if (m_bReauthInProgress) {
+            PutModule(t_s("Re-authentication already in progress"));
+            return;
+        }
+
+        StartReauth();
+    }
+
+    void StartReauth() {
+        if (m_Mechanisms.empty()) {
+            GetMechanismsString().Split(" ", m_Mechanisms);
+        }
+
+        if (m_Mechanisms.empty()) {
+            PutModule(t_s("No SASL mechanisms configured"));
+            return;
+        }
+
+        m_bReauthInProgress = true;
+        m_Mechanisms.SetIndex(0);
+
+        if (m_bVerbose) {
+            PutModule(t_f("Starting SASL re-authentication with {1}")(
+                m_Mechanisms.GetCurrent()));
+        }
+
+        PutIRC("AUTHENTICATE " + m_Mechanisms.GetCurrent());
     }
 
     CString GetMechanismsString() const {
@@ -198,14 +275,15 @@ class CSASLMod : public CModule {
         /* Send blank authenticate for other mechanisms (like EXTERNAL). */
         CString sAuthLine;
         if (m_Mechanisms.GetCurrent().Equals("PLAIN") && sLine.Equals("+")) {
-            sAuthLine = GetNV("username") + '\0' + GetNV("username") +
-                                '\0' + GetNV("password");
+            sAuthLine = GetNV("username") + '\0' + GetNV("username") + '\0' +
+                        GetNV("password");
             sAuthLine.Base64Encode();
         }
 
         /* The spec requires authentication data to be sent in chunks */
         const size_t chunkSize = 400;
-        for (size_t offset = 0; offset < sAuthLine.length(); offset += chunkSize) {
+        for (size_t offset = 0; offset < sAuthLine.length();
+             offset += chunkSize) {
             size_t size = std::min(chunkSize, sAuthLine.length() - offset);
             PutIRC("AUTHENTICATE " + sAuthLine.substr(offset, size));
         }
@@ -241,26 +319,31 @@ class CSASLMod : public CModule {
 
     EModRet OnRawMessage(CMessage& msg) override {
         if (msg.GetCommand().Equals("AUTHENTICATE")) {
-            Authenticate(msg.GetParam(0));
+            if (m_bReauthInProgress || !m_bAuthenticated)
+                Authenticate(msg.GetParam(0));
             return HALT;
         }
         return CONTINUE;
     }
 
     EModRet OnNumericMessage(CNumericMessage& msg) override {
-        if (m_Mechanisms.empty()) return CONTINUE;
+        if (m_Mechanisms.empty() && !m_bReauthInProgress) return CONTINUE;
         if (msg.GetCode() == 903) {
             /* SASL success! */
             if (m_bVerbose) {
                 PutModule(
                     t_f("{1} mechanism succeeded.")(m_Mechanisms.GetCurrent()));
             }
-            GetNetwork()->GetIRCSock()->ResumeCap();
+            if (!m_bReauthInProgress) {
+                GetNetwork()->GetIRCSock()->ResumeCap();
+            } else {
+                PutModule(t_s("SASL re-authentication successful"));
+            }
+            m_bReauthInProgress = false;
             m_bAuthenticated = true;
             DEBUG("sasl: Authenticated with mechanism ["
                   << m_Mechanisms.GetCurrent() << "]");
-        } else if (msg.GetCode() == 904 ||
-                   msg.GetCode() == 905) {
+        } else if (msg.GetCode() == 904 || msg.GetCode() == 905) {
             DEBUG("sasl: Mechanism [" << m_Mechanisms.GetCurrent()
                                       << "] failed.");
             if (m_bVerbose) {
@@ -272,10 +355,16 @@ class CSASLMod : public CModule {
                 m_Mechanisms.IncrementIndex();
                 PutIRC("AUTHENTICATE " + m_Mechanisms.GetCurrent());
             } else {
-                CheckRequireAuth();
-                GetNetwork()->GetIRCSock()->ResumeCap();
+                if (m_bReauthInProgress) {
+                    PutModule(t_s("SASL re-authentication failed"));
+                    m_bReauthInProgress = false;
+                } else {
+                    CheckRequireAuth();
+                    GetNetwork()->GetIRCSock()->ResumeCap();
+                }
             }
         } else if (msg.GetCode() == 906) {
+            if (m_bReauthInProgress) m_bReauthInProgress = false;
             /* CAP wasn't paused? */
             DEBUG("sasl: Reached 906.");
             CheckRequireAuth();
@@ -298,7 +387,10 @@ class CSASLMod : public CModule {
         CheckRequireAuth();
     }
 
-    void OnIRCDisconnected() override { m_bAuthenticated = false; }
+    void OnIRCDisconnected() override {
+        m_bAuthenticated = false;
+        m_bReauthInProgress = false;
+    }
 
     CString GetWebMenuTitle() override { return t_s("SASL"); }
 
@@ -337,6 +429,7 @@ class CSASLMod : public CModule {
   private:
     Mechanisms m_Mechanisms;
     bool m_bAuthenticated;
+    bool m_bReauthInProgress;
     bool m_bVerbose = false;
 };
 

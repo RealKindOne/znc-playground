@@ -20,45 +20,79 @@ class CStripControlsMod : public CModule {
   public:
     MODCONSTRUCTOR(CStripControlsMod) {}
 
-    EModRet OnPrivCTCP(CNick& Nick, CString& sMessage) override {
-        sMessage.StripControls();
+    EModRet OnPrivCTCPMessage(CCTCPMessage& Message) override {
+        CString sText = Message.GetText();
+        sText.StripControls();
+        Message.SetText(sText);
         return CONTINUE;
     }
 
-    EModRet OnChanCTCP(CNick& Nick, CChan& Channel,
-                       CString& sMessage) override {
-        sMessage.StripControls();
+    EModRet OnChanCTCPMessage(CCTCPMessage& Message) override {
+        CString sText = Message.GetText();
+        sText.StripControls();
+        Message.SetText(sText);
         return CONTINUE;
     }
 
-    EModRet OnPrivNotice(CNick& Nick, CString& sMessage) override {
-        sMessage.StripControls();
+    EModRet OnPrivNoticeMessage(CNoticeMessage& Message) override {
+        CString sText = Message.GetText();
+        sText.StripControls();
+        Message.SetText(sText);
         return CONTINUE;
     }
 
-    EModRet OnChanNotice(CNick& Nick, CChan& Channel,
-                         CString& sMessage) override {
-        sMessage.StripControls();
+    EModRet OnChanNoticeMessage(CNoticeMessage& Message) override {
+        CString sText = Message.GetText();
+        sText.StripControls();
+        Message.SetText(sText);
         return CONTINUE;
     }
 
-    EModRet OnPrivMsg(CNick& Nick, CString& sMessage) override {
-        sMessage.StripControls();
+    EModRet OnPrivTextMessage(CTextMessage& Message) override {
+        CString sText = Message.GetText();
+        sText.StripControls();
+        Message.SetText(sText);
         return CONTINUE;
     }
 
-    EModRet OnChanMsg(CNick& Nick, CChan& Channel, CString& sMessage) override {
-        sMessage.StripControls();
+    EModRet OnChanTextMessage(CTextMessage& Message) override {
+        CString sText = Message.GetText();
+        sText.StripControls();
+        Message.SetText(sText);
+        return CONTINUE;
+    }
+
+    EModRet OnTopicMessage(CTopicMessage& Message) override {
+        CString sTopic = Message.GetTopic();
+        sTopic.StripControls();
+        Message.SetTopic(sTopic);
+        return CONTINUE;
+    }
+
+    EModRet OnNumericMessage(CNumericMessage& Message) override {
+        // Strip topic from /list
+        if (Message.GetCode() == 322) {  // RPL_LIST
+            CString sTopic = Message.GetParam(3);
+            sTopic.StripControls();
+            Message.SetParam(3, sTopic);
+        }
+        // Strip topic when joining channel
+        else if (Message.GetCode() == 332) {  // RPL_TOPIC
+            CString sTopic = Message.GetParam(2);
+            sTopic.StripControls();
+            Message.SetParam(2, sTopic);
+        }
         return CONTINUE;
     }
 };
 
-template <>
-void TModInfo<CStripControlsMod>(CModInfo& Info) {
-    Info.SetWikiPage("stripcontrols");
-    Info.AddType(CModInfo::UserModule);
-}
+    template <>
+    void TModInfo<CStripControlsMod>(CModInfo& Info) {
+        Info.SetWikiPage("stripcontrols");
+        Info.AddType(CModInfo::UserModule);
+    }
 
-NETWORKMODULEDEFS(CStripControlsMod,
-                  t_s("Strips control codes (Colors, Bold, ..) from channel "
-                      "and private messages."))
+    NETWORKMODULEDEFS(
+        CStripControlsMod,
+        t_s("Strips control codes (Colors, Bold, ..) from channel "
+            "and private messages."))

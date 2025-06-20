@@ -21,6 +21,7 @@
 
 #define NV_REQUIRE_AUTH "require_auth"
 #define NV_MECHANISMS "mechanisms"
+#define NV_AUTO_REAUTH "auto_reauth"
 
 class Mechanisms : public VCString {
   public:
@@ -44,6 +45,23 @@ class Mechanisms : public VCString {
 
   private:
     unsigned int m_uiIndex = 0;
+};
+
+// Forward declaration
+class CSASLMod;
+
+class CSASLAutoReauthTimer : public CTimer {
+  public:
+    CSASLAutoReauthTimer(CSASLMod* pModule)
+        : CTimer((CModule*)pModule, 1, 1, "AutoReauth",
+                 "Automatic SASL re-authentication after CAP NEW"),
+          m_pSASLMod(pModule) {}
+
+  protected:
+    void RunJob() override;
+
+  private:
+    CSASLMod* m_pSASLMod;
 };
 
 class CSASLMod : public CModule {
@@ -81,8 +99,13 @@ class CSASLMod : public CModule {
                        m_bVerbose = sLine.Token(1, true).ToBool();
                        PutModule("Verbose: " + CString(m_bVerbose));
                    });
+        AddCommand(
+            "AutoReauth", t_d("[yes|no]"),
+            t_d("Automatically re-authenticate when SASL becomes available"),
+            [=](const CString& sLine) { AutoReauthCommand(sLine); });
 
         m_bAuthenticated = false;
+        m_bReauthInProgress = false;
         m_bReauthInProgress = false;
     }
 
@@ -128,6 +151,53 @@ class CSASLMod : public CModule {
 
         PutModule(t_f("Username has been set to [{1}]")(GetNV("username")));
         PutModule(t_f("Password has been set to [{1}]")(GetNV("password")));
+    }
+
+    void ReauthCommand(const CString& sLine) {
+        if (!GetNetwork()->IsIRCConnected()) {
+            PutModule(t_s("Not connected to IRC server"));
+            return;
+        }
+
+        if (m_bReauthInProgress) {
+            PutModule(t_s("Re-authentication already in progress"));
+            return;
+        }
+
+        StartReauth();
+    }
+
+    void AutoReauthCommand(const CString& sLine) {
+        if (!sLine.Token(1).empty()) {
+            SetNV(NV_AUTO_REAUTH, sLine.Token(1));
+        }
+
+        if (GetNV(NV_AUTO_REAUTH).ToBool()) {
+            PutModule(t_s("Automatic re-authentication is enabled"));
+        } else {
+            PutModule(t_s("Automatic re-authentication is disabled"));
+        }
+    }
+
+    void StartReauth() {
+        if (m_Mechanisms.empty()) {
+            GetMechanismsString().Split(" ", m_Mechanisms);
+        }
+
+        if (m_Mechanisms.empty()) {
+            PutModule(t_s("No SASL mechanisms configured"));
+            return;
+        }
+
+        m_bReauthInProgress = true;
+        m_Mechanisms.SetIndex(0);
+
+        if (m_bVerbose) {
+            PutModule(t_f("Starting SASL re-authentication with {1}")(
+                m_Mechanisms.GetCurrent()));
+        }
+
+        PutIRC("AUTHENTICATE " + m_Mechanisms.GetCurrent());
     }
 
     void SetMechanismCommand(const CString& sLine) {
@@ -209,40 +279,6 @@ class CSASLMod : public CModule {
 
         return false;
     }
-    void ReauthCommand(const CString& sLine) {
-        if (!GetNetwork()->IsIRCConnected()) {
-            PutModule(t_s("Not connected to IRC server"));
-            return;
-        }
-
-        if (m_bReauthInProgress) {
-            PutModule(t_s("Re-authentication already in progress"));
-            return;
-        }
-
-        StartReauth();
-    }
-
-    void StartReauth() {
-        if (m_Mechanisms.empty()) {
-            GetMechanismsString().Split(" ", m_Mechanisms);
-        }
-
-        if (m_Mechanisms.empty()) {
-            PutModule(t_s("No SASL mechanisms configured"));
-            return;
-        }
-
-        m_bReauthInProgress = true;
-        m_Mechanisms.SetIndex(0);
-
-        if (m_bVerbose) {
-            PutModule(t_f("Starting SASL re-authentication with {1}")(
-                m_Mechanisms.GetCurrent()));
-        }
-
-        PutIRC("AUTHENTICATE " + m_Mechanisms.GetCurrent());
-    }
 
     CString GetMechanismsString() const {
         if (GetNV(NV_MECHANISMS).empty()) {
@@ -294,7 +330,23 @@ class CSASLMod : public CModule {
     }
 
     bool OnServerCapAvailable(const CString& sCap) override {
-        return sCap.Equals("sasl");
+        if (sCap.Equals("sasl")) {
+            // If we're already connected and authenticated, and SASL becomes
+            // newly available, automatically attempt re-authentication if
+            // enabled
+            if (GetNV(NV_AUTO_REAUTH).ToBool() &&
+                GetNetwork()->IsIRCConnected() && m_bAuthenticated &&
+                !m_bReauthInProgress) {
+                if (m_bVerbose) {
+                    PutModule(
+                        t_s("SASL capability became available, starting "
+                            "re-authentication"));
+                }
+                AddTimer(new CSASLAutoReauthTimer(this));
+                return true;
+            }
+        }
+        return CONTINUE;
     }
 
     void OnServerCapResult(const CString& sCap, bool bSuccess) override {
@@ -339,8 +391,8 @@ class CSASLMod : public CModule {
             } else {
                 PutModule(t_s("SASL re-authentication successful"));
             }
-            m_bReauthInProgress = false;
             m_bAuthenticated = true;
+            m_bReauthInProgress = false;
             DEBUG("sasl: Authenticated with mechanism ["
                   << m_Mechanisms.GetCurrent() << "]");
         } else if (msg.GetCode() == 904 || msg.GetCode() == 905) {
@@ -408,6 +460,7 @@ class CSASLMod : public CModule {
                 SetNV("password", sPassword);
             }
             SetNV(NV_REQUIRE_AUTH, WebSock.GetParam("require_auth"));
+            SetNV(NV_AUTO_REAUTH, WebSock.GetParam("auto_reauth"));
             SetNV(NV_MECHANISMS, WebSock.GetParam("mechanisms"));
         }
 
@@ -415,6 +468,7 @@ class CSASLMod : public CModule {
         Tmpl["Password"] = GetNV("password");
         Tmpl["RequireAuth"] = GetNV(NV_REQUIRE_AUTH);
         Tmpl["Mechanisms"] = GetMechanismsString();
+        Tmpl["AutoReauth"] = GetNV(NV_AUTO_REAUTH);
 
         for (const auto& it : SupportedMechanisms) {
             CTemplate& Row = Tmpl.AddRow("MechanismLoop");
@@ -432,6 +486,9 @@ class CSASLMod : public CModule {
     bool m_bReauthInProgress;
     bool m_bVerbose = false;
 };
+
+// Implementation of timer's RunJob method
+void CSASLAutoReauthTimer::RunJob() { m_pSASLMod->StartReauth(); }
 
 template <>
 void TModInfo<CSASLMod>(CModInfo& Info) {

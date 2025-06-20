@@ -1704,6 +1704,14 @@ bool CClient::OnTagMessage(CTargetMessage& Message) {
 bool CClient::OnTextMessage(CTextMessage& Message) {
     CString sTargets = Message.GetTarget();
 
+    // Check for empty PRIVMSG
+    if (sTargets.empty()) {
+        PutClient(":znc 411 " + GetNick() + " :No recipient given (PRIVMSG)");
+        return true;
+    }
+
+
+
     VCString vTargets;
     sTargets.Split(",", vTargets, false);
 

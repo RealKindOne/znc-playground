@@ -68,17 +68,58 @@ class CFOModule : public CModule {
         // Handle WHOIS
         if (sLine.Token(0).Equals("whois")) {
             CString sNick = sLine.Token(1);
+            const CString& sPrefix = GetUser()->GetStatusPrefix();
 
-            if (IsOnlineModNick(sNick)) {
-                CIRCNetwork* pNetwork = GetNetwork();
-                PutUser(":znc.in 311 " + pNetwork->GetCurNick() + " " + sNick +
-                        " znc znc.in * :" + sNick);
-                PutUser(":znc.in 312 " + pNetwork->GetCurNick() + " " + sNick +
-                        " *.znc.in :Bouncer");
-                PutUser(":znc.in 318 " + pNetwork->GetCurNick() + " " + sNick +
-                        " :End of /WHOIS list.");
+            // Check if it looks like a module nick
+            if (sNick.StartsWith(sPrefix)) {
+                CString sModNick = sNick.substr(sPrefix.length());
 
-                return HALT;
+                if (IsOnlineModNick(sNick)) {
+                    CIRCNetwork* pNetwork = GetNetwork();
+                    // Module might be loaded at multiple levels. Print all
+                    // levels.
+                    CString sModNick =
+                        sNick.substr(GetUser()->GetStatusPrefix().length());
+
+                    VCString vTypes;
+                    if (CZNC::Get().GetModules().FindModule(sModNick)) {
+                        vTypes.push_back("global");
+                    }
+                    if (GetUser()->GetModules().FindModule(sModNick)) {
+                        vTypes.push_back("user");
+                    }
+                    if (GetNetwork()->GetModules().FindModule(sModNick)) {
+                        vTypes.push_back("network");
+                    }
+
+                    CString sModType = "";
+                    if (!vTypes.empty()) {
+                        sModType =
+                            " (" +
+                            CString(",").Join(vTypes.begin(), vTypes.end()) +
+                            ")";
+                    }
+
+                    CString sModIdent = sNick.TrimPrefix_n(GetUser()->GetStatusPrefix());
+
+                    PutUser(":znc.in 311 " + pNetwork->GetCurNick() + " " +
+                            sNick + " " + sModIdent + " znc.in * :" + sNick +
+                            sModType);
+                    PutUser(":znc.in 312 " + pNetwork->GetCurNick() + " " +
+                            sNick + " *.znc.in :Bouncer");
+                    PutUser(":znc.in 318 " + pNetwork->GetCurNick() + " " +
+                            sNick + " :End of /WHOIS list.");
+
+                    return HALT;
+                } else if (!sModNick.empty() && !sModNick.Equals("status")) {
+                    // Module not loaded.
+                    CIRCNetwork* pNetwork = GetNetwork();
+                    PutUser(":znc.in 401 " + pNetwork->GetCurNick() + " " +
+                            sNick + " :No such nick/channel");
+                    PutUser(":znc.in 318 " + pNetwork->GetCurNick() + " " +
+                            sNick + " :End of /WHOIS list.");
+                    return HALT;
+                }
             }
         }
 

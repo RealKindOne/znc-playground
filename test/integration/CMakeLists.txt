@@ -49,6 +49,7 @@ add_executable(inttest
 	"tests/modules/autoattach_test.cpp"
 	"tests/modules/cert_test.cpp"
 	"tests/modules/chansaver_test.cpp"
+	"tests/modules/clearbufferonmsg_test.cpp"
 	"${GTEST_ROOT}/src/gtest-all.cc"
 	"${GMOCK_ROOT}/src/gmock-all.cc")
 

@@ -52,6 +52,7 @@ add_executable(inttest
 	"tests/modules/chansaver_test.cpp"
 	"tests/modules/clearbufferonmsg_test.cpp"
 	"tests/modules/flooddetach_test.cpp"
+	"tests/modules/keepnick_test.cpp"
 	"tests/modules/modulesonline_test.cpp"
 	"tests/modules/perform_test.cpp"
 	"tests/modules/sendraw_test.cpp"

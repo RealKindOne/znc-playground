@@ -193,24 +193,6 @@ TEST_F(ZNCTest, ModuleCrypt) {
     client1.ReadUntil(secretmsg);  // by echo-message
 }
 
-TEST_F(ZNCTest, KeepNickModule) {
-    auto znc = Run();
-    auto ircd = ConnectIRCd();
-    auto client = LoginClient();
-    client.Write("znc loadmod keepnick");
-    client.ReadUntil("Loaded module");
-    ircd.ReadUntil("NICK user");
-    ircd.Write(":server 433 * nick :Nickname is already in use.");
-    ircd.ReadUntil("NICK user_");
-    ircd.Write(":server 001 user_ :Hello");
-    client.ReadUntil("Connected!");
-    ircd.ReadUntil("NICK user");
-    ircd.Write(":server 435 user_ user #error :Nope :-P");
-    client.ReadUntil(
-        ":*keepnick!keepnick@znc.in PRIVMSG user_ "
-        ":Unable to obtain nick user: Nope :-P, #error");
-}
-
 TEST_F(ZNCTest, ModuleCSRFOverride) {
     // TODO: Qt 6.8 introduced QNetworkRequest::FullLocalServerNameAttribute to
     // let it connect to unix socket

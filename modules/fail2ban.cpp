@@ -30,7 +30,8 @@ class CFailToBanMod : public CModule {
                    [=](const CString& sLine) { OnAttemptsCommand(sLine); });
         AddCommand("Ban", t_d("<hosts>"), t_d("Ban the specified hosts."),
                    [=](const CString& sLine) { OnBanCommand(sLine); });
-        AddCommand("Unban", t_d("<hosts>"), t_d("Unban the specified hosts."),
+        AddCommand("Unban", t_d("<ID>|<hosts>"),
+                   t_d("Unban the specified ID or host."),
                    [=](const CString& sLine) { OnUnbanCommand(sLine); });
         AddCommand("List", "", t_d("List banned hosts."),
                    [=](const CString& sLine) { OnListCommand(sLine); });
@@ -67,7 +68,18 @@ class CFailToBanMod : public CModule {
     void OnPostRehash() override { m_Cache.Clear(); }
 
     void Add(const CString& sHost, unsigned int count) {
-        m_Cache.AddItem(sHost, count, m_Cache.GetTTL());
+        time_t now = time(nullptr);
+        BanInfo* pInfo = m_Cache.GetItem(sHost);
+
+        if (pInfo) {
+            pInfo->attempts = count;
+            pInfo->last_attempt = now;
+            // Keep the original first_attempt time
+            m_Cache.AddItem(sHost, *pInfo, m_Cache.GetTTL());
+        } else {
+            BanInfo info = {count, now, now};
+            m_Cache.AddItem(sHost, info, m_Cache.GetTTL());
+        }
     }
 
     bool Remove(const CString& sHost) { return m_Cache.RemItem(sHost); }
@@ -125,7 +137,6 @@ class CFailToBanMod : public CModule {
         }
 
         CString sHosts = sCommand.Token(1, true);
-
         if (sHosts.empty()) {
             PutStatus(t_s("Usage: Ban <hosts>"));
             return;
@@ -136,7 +147,8 @@ class CFailToBanMod : public CModule {
         sHosts.Split(" ", vsHosts, false, "", "", true, true);
 
         for (const CString& sHost : vsHosts) {
-            Add(sHost, 0);
+            // Ban with max attempts to ensure they're blocked
+            Add(sHost, m_uiAllowedFailed);
             PutModule(t_f("Banned: {1}")(sHost));
         }
     }
@@ -147,41 +159,97 @@ class CFailToBanMod : public CModule {
             return;
         }
 
-        CString sHosts = sCommand.Token(1, true);
-
-        if (sHosts.empty()) {
-            PutStatus(t_s("Usage: Unban <hosts>"));
+        CString sTargets = sCommand.Token(1, true);
+        if (sTargets.empty()) {
+            PutModule(t_s("Usage: Unban <hosts|IDs>"));
             return;
         }
 
-        VCString vsHosts;
-        sHosts.Replace(",", " ");
-        sHosts.Split(" ", vsHosts, false, "", "", true, true);
+        VCString vsTargets;
+        sTargets.Replace(",", " ");
+        sTargets.Split(" ", vsTargets, false, "", "", true, true);
 
-        for (const CString& sHost : vsHosts) {
-            if (Remove(sHost)) {
-                PutModule(t_f("Unbanned: {1}")(sHost));
+        for (const CString& sTarget : vsTargets) {
+            bool bUnbanned = false;
+
+            // Check if it's a numeric ID by trying to convert and validating
+            unsigned int targetId = sTarget.ToUInt();
+            if (targetId > 0 && CString(targetId) == sTarget) {
+                // Find host by ID
+                unsigned int currentId = 1;
+                for (const auto& it : m_Cache.GetItems()) {
+                    if (currentId == targetId) {
+                        if (Remove(it.first)) {
+                            PutModule(t_f("Unbanned ID {1} ({2})")(targetId,
+                                                                   it.first));
+                            bUnbanned = true;
+                        }
+                        break;
+                    }
+                    currentId++;
+                }
             } else {
-                PutModule(t_f("Ignored: {1}")(sHost));
+                // Treat as hostname/IP
+                if (Remove(sTarget)) {
+                    PutModule(t_f("Unbanned: {1}")(sTarget));
+                    bUnbanned = true;
+                }
+            }
+
+            if (!bUnbanned) {
+                PutModule(t_f("{1} is not banned.")(sTarget));
             }
         }
     }
-
     void OnListCommand(const CString& sCommand) {
         if (!GetUser()->IsAdmin()) {
             PutModule(t_s("Access denied"));
             return;
         }
 
+        time_t now = time(nullptr);
+
         CTable Table;
+        Table.AddColumn(t_s("ID", "list"));
+        Table.AddColumn(t_s("Username", "list"));
         Table.AddColumn(t_s("Host", "list"));
         Table.AddColumn(t_s("Attempts", "list"));
+        Table.AddColumn(t_s("First Seen", "list"));
+        Table.AddColumn(t_s("Last Seen", "list"));
+        Table.AddColumn(t_s("Expires In", "list"));
         Table.SetStyle(CTable::ListStyle);
 
+        unsigned int id = 1;
         for (const auto& it : m_Cache.GetItems()) {
             Table.AddRow();
+            Table.SetCell(t_s("ID", "list"), CString(id++));
+            Table.SetCell(t_s("Username", "list"), it.second.username);
             Table.SetCell(t_s("Host", "list"), it.first);
-            Table.SetCell(t_s("Attempts", "list"), CString(it.second));
+            Table.SetCell(t_s("Attempts", "list"), CString(it.second.attempts));
+            // Format timestamps
+            CString sFirstSeen =
+                CUtils::FormatTime(it.second.first_attempt, "%Y-%m-%d %H:%M:%S",
+                                   GetUser()->GetTimezone());
+            CString sLastSeen =
+                CUtils::FormatTime(it.second.last_attempt, "%Y-%m-%d %H:%M:%S",
+                                   GetUser()->GetTimezone());
+
+            Table.SetCell(t_s("First Seen", "list"), sFirstSeen);
+            Table.SetCell(t_s("Last Seen", "list"), sLastSeen);
+            // Calculate remaining time
+            time_t ttl_seconds =
+                m_Cache.GetTTL() / 1000;  // Convert ms to seconds
+            time_t elapsed = now - it.second.last_attempt;
+            time_t remaining = ttl_seconds - elapsed;
+
+            CString sCountdown;
+            if (remaining <= 0) {
+                sCountdown = "Expired";
+            } else {
+                sCountdown = FormatDuration(remaining);
+            }
+
+            Table.SetCell(t_s("Expires In", "list"), sCountdown);
         }
 
         if (Table.empty()) {
@@ -193,13 +261,16 @@ class CFailToBanMod : public CModule {
 
     void OnClientConnect(CZNCSock* pClient, const CString& sHost,
                          unsigned short uPort) override {
-        unsigned int* pCount = m_Cache.GetItem(sHost);
-        if (sHost.empty() || pCount == nullptr || *pCount < m_uiAllowedFailed) {
+        BanInfo* pInfo = m_Cache.GetItem(sHost);
+        if (sHost.empty() || pInfo == nullptr ||
+            pInfo->attempts < m_uiAllowedFailed) {
             return;
         }
 
-        // refresh their ban
-        Add(sHost, *pCount);
+        // Refresh their ban with updated timestamp
+        time_t now = time(nullptr);
+        pInfo->last_attempt = now;
+        m_Cache.AddItem(sHost, *pInfo, m_Cache.GetTTL());
 
         pClient->Write(
             "ERROR :Closing link [Please try again later - reconnecting too "
@@ -209,25 +280,27 @@ class CFailToBanMod : public CModule {
 
     void OnFailedLogin(const CString& sUsername,
                        const CString& sRemoteIP) override {
-        unsigned int* pCount = m_Cache.GetItem(sRemoteIP);
-        if (pCount)
-            Add(sRemoteIP, *pCount + 1);
-        else
-            Add(sRemoteIP, 1);
+        time_t now = time(nullptr);
+        BanInfo* pInfo = m_Cache.GetItem(sRemoteIP);
+
+        if (pInfo) {
+            pInfo->attempts++;
+            pInfo->last_attempt = now;
+            pInfo->username = sUsername;  // Update username
+            m_Cache.AddItem(sRemoteIP, *pInfo, m_Cache.GetTTL());
+        } else {
+            BanInfo info = {1, now, now, sUsername};  // Include username
+            m_Cache.AddItem(sRemoteIP, info, m_Cache.GetTTL());
+        }
     }
 
-    void OnClientLogin() override {
-        Remove(GetClient()->GetRemoteIP());
-    }
-
+    void OnClientLogin() override { Remove(GetClient()->GetRemoteIP()); }
     EModRet OnLoginAttempt(std::shared_ptr<CAuthBase> Auth) override {
-        // e.g. webadmin ends up here
         const CString& sRemoteIP = Auth->GetRemoteIP();
-
         if (sRemoteIP.empty()) return CONTINUE;
 
-        unsigned int* pCount = m_Cache.GetItem(sRemoteIP);
-        if (pCount && *pCount >= m_uiAllowedFailed) {
+        BanInfo* pInfo = m_Cache.GetItem(sRemoteIP);
+        if (pInfo && pInfo->attempts >= m_uiAllowedFailed) {
             // OnFailedLogin() will refresh their ban
             Auth->RefuseLogin("Please try again later - reconnecting too fast");
             return HALT;
@@ -236,8 +309,31 @@ class CFailToBanMod : public CModule {
         return CONTINUE;
     }
 
+    CString FormatDuration(time_t seconds) {
+        if (seconds <= 0) return "0s";
+
+        time_t hours = seconds / 3600;
+        seconds %= 3600;
+        time_t minutes = seconds / 60;
+        seconds %= 60;
+
+        CString result;
+        if (hours > 0) result += CString(hours) + "h";
+        if (minutes > 0) result += CString(minutes) + "m";
+        if (seconds > 0 || result.empty()) result += CString(seconds) + "s";
+
+        return result;
+    }
+
   private:
-    TCacheMap<CString, unsigned int> m_Cache;
+    struct BanInfo {
+        unsigned int attempts;
+        time_t first_attempt;
+        time_t last_attempt;
+        CString username;
+    };
+
+    TCacheMap<CString, BanInfo> m_Cache;
     unsigned int m_uiAllowedFailed{};
 };
 

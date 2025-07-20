@@ -102,19 +102,17 @@ class CAutoCycleMod : public CModule {
         }
     }
 
-    void OnPart(const CNick& Nick, CChan& Channel,
-                const CString& sMessage) override {
-        AutoCycle(Channel);
+    void OnPartMessage(CPartMessage& Message) override {
+        AutoCycle(*Message.GetChan());
     }
 
-    void OnQuit(const CNick& Nick, const CString& sMessage,
-                const vector<CChan*>& vChans) override {
+    void OnQuitMessage(CQuitMessage& Message,
+                       const vector<CChan*>& vChans) override {
         for (CChan* pChan : vChans) AutoCycle(*pChan);
     }
 
-    void OnKick(const CNick& Nick, const CString& sOpNick, CChan& Channel,
-                const CString& sMessage) override {
-        AutoCycle(Channel);
+    void OnKickMessage(CKickMessage& Message) override {
+        AutoCycle(*Message.GetChan());
     }
 
   protected:

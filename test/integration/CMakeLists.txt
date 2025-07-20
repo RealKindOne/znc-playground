@@ -54,6 +54,7 @@ add_executable(inttest
 	"tests/modules/modulesonline_test.cpp"
 	"tests/modules/perform_test.cpp"
 	"tests/modules/sendraw_test.cpp"
+	"tests/modules/stickychan_test.cpp"
 	"tests/modules/watch_test.cpp"
 	"${GTEST_ROOT}/src/gtest-all.cc"
 	"${GMOCK_ROOT}/src/gmock-all.cc")

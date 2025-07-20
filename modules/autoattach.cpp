@@ -118,18 +118,19 @@ class CChanAttach : public CModule {
 
     void HandleList(const CString& sLine) {
         CTable Table;
+        Table.AddColumn(t_s("Id"));
         Table.AddColumn(t_s("Neg"));
         Table.AddColumn(t_s("Chan"));
         Table.AddColumn(t_s("Search"));
         Table.AddColumn(t_s("Host"));
 
-        VAttachIter it = m_vMatches.begin();
-        for (; it != m_vMatches.end(); ++it) {
+        for (size_t i = 0; i < m_vMatches.size(); ++i) {
             Table.AddRow();
-            Table.SetCell(t_s("Neg"), it->IsNegated() ? "!" : "");
-            Table.SetCell(t_s("Chan"), it->GetChans());
-            Table.SetCell(t_s("Search"), it->GetSearch());
-            Table.SetCell(t_s("Host"), it->GetHostMask());
+            Table.SetCell(t_s("Id"), CString(i + 1));
+            Table.SetCell(t_s("Neg"), m_vMatches[i].IsNegated() ? "!" : "");
+            Table.SetCell(t_s("Chan"), m_vMatches[i].GetChans());
+            Table.SetCell(t_s("Search"), m_vMatches[i].GetSearch());
+            Table.SetCell(t_s("Host"), m_vMatches[i].GetHostMask());
         }
 
         if (Table.size()) {
@@ -137,6 +138,35 @@ class CChanAttach : public CModule {
         } else {
             PutModule(t_s("You have no entries."));
         }
+    }
+
+    void HandleSwap(const CString& sLine) {
+        CString sIdx1 = sLine.Token(1);
+        CString sIdx2 = sLine.Token(2);
+
+        if (sIdx1.empty() || sIdx2.empty()) {
+            PutModule(t_s("Usage: Swap <index1> <index2>"));
+            return;
+        }
+
+        unsigned int uIdx1 = sIdx1.ToUInt();
+        unsigned int uIdx2 = sIdx2.ToUInt();
+
+        if (uIdx1 == 0 || uIdx2 == 0 || uIdx1 > m_vMatches.size() ||
+            uIdx2 > m_vMatches.size() || uIdx1 == uIdx2) {
+            PutModule(
+                t_f("Invalid indices. Use 1-{1}")(CString(m_vMatches.size())));
+            return;
+        }
+
+        uIdx1--;
+        uIdx2--;
+
+        std::swap(m_vMatches[uIdx1], m_vMatches[uIdx2]);
+
+        SaveMatches();
+
+        PutModule(t_f("Swapped entries {1} and {2}")(sIdx1, sIdx2));
     }
 
   public:
@@ -151,6 +181,9 @@ class CChanAttach : public CModule {
                    [=](const CString& sLine) { HandleDel(sLine); });
         AddCommand("List", "", t_d("List all entries"),
                    [=](const CString& sLine) { HandleList(sLine); });
+        AddCommand("Swap", t_d("<index1> <index2>"),
+                   t_d("Swap two entries by their list positions"),
+                   [=](const CString& sLine) { HandleSwap(sLine); });
     }
 
     ~CChanAttach() override {}
@@ -209,20 +242,24 @@ class CChanAttach : public CModule {
         }
     }
 
-    EModRet OnChanNotice(CNick& Nick, CChan& Channel,
-                         CString& sMessage) override {
-        TryAttach(Nick, Channel, sMessage);
+    EModRet OnChanNoticeMessage(CNoticeMessage& Message) override {
+        CString sText = Message.GetText();
+        TryAttach(Message.GetNick(), *Message.GetChan(), sText);
+        Message.SetText(sText);
         return CONTINUE;
     }
 
-    EModRet OnChanMsg(CNick& Nick, CChan& Channel, CString& sMessage) override {
-        TryAttach(Nick, Channel, sMessage);
+    EModRet OnChanTextMessage(CTextMessage& Message) override {
+        CString sText = Message.GetText();
+        TryAttach(Message.GetNick(), *Message.GetChan(), sText);
+        Message.SetText(sText);
         return CONTINUE;
     }
 
-    EModRet OnChanAction(CNick& Nick, CChan& Channel,
-                         CString& sMessage) override {
-        TryAttach(Nick, Channel, sMessage);
+    EModRet OnChanActionMessage(CActionMessage& Message) override {
+        CString sText = Message.GetText();
+        TryAttach(Message.GetNick(), *Message.GetChan(), sText);
+        Message.SetText(sText);
         return CONTINUE;
     }
 
@@ -268,6 +305,14 @@ class CChanAttach : public CModule {
         m_vMatches.erase(it);
 
         return true;
+    }
+
+    void SaveMatches() {
+        ClearNV();
+
+        for (auto& match : m_vMatches) {
+            SetNV(match.ToString(), "");
+        }
     }
 
   private:

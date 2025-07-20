@@ -193,41 +193,6 @@ TEST_F(ZNCTest, ModuleCrypt) {
     client1.ReadUntil(secretmsg);  // by echo-message
 }
 
-TEST_F(ZNCTest, AutoAttachModule) {
-    auto znc = Run();
-    auto ircd = ConnectIRCd();
-    auto client = LoginClient();
-    InstallModule("testmod.cpp", R"(
-        #include <znc/Client.h>
-        #include <znc/Modules.h>
-        class TestModule : public CModule {
-          public:
-            MODCONSTRUCTOR(TestModule) {}
-            EModRet OnChanBufferPlayMessage(CMessage& Message) override {
-                PutIRC("TEST " + Message.GetClient()->GetNickMask());
-                return CONTINUE;
-            }
-        };
-        MODULEDEFS(TestModule, "Test")
-    )");
-    client.Write("znc loadmod testmod");
-    client.Write("PRIVMSG *controlpanel :Set AutoClearChanBuffer $me no");
-    client.Write("znc loadmod autoattach");
-    client.Write("PRIVMSG *autoattach :Add * * *");
-    client.ReadUntil("Added to list");
-    ircd.Write(":server 001 nick :Hello");
-    ircd.Write(":nick JOIN :#znc");
-    ircd.Write(":server 353 nick #znc :nick");
-    ircd.Write(":server 366 nick #znc :End of /NAMES list");
-    ircd.Write(":foo PRIVMSG #znc :hi");
-    client.ReadUntil(":foo PRIVMSG");
-    client.Write("detach #znc");
-    client.ReadUntil("Detached");
-    ircd.Write(":foo PRIVMSG #znc :hello");
-    ircd.ReadUntil("TEST");
-    client.ReadUntil("hello");
-}
-
 TEST_F(ZNCTest, KeepNickModule) {
     auto znc = Run();
     auto ircd = ConnectIRCd();

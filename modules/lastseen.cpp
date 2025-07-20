@@ -28,8 +28,31 @@ class CLastSeenMod : public CModule {
         return GetNV(pUser->GetUsername()).ToULong();
     }
 
-    void SetTime(const CUser* pUser) {
-        SetNV(pUser->GetUsername(), CString(time(nullptr)));
+    CString GetIP(const CUser* pUser) {
+        CString sData = GetNV(pUser->GetUsername());
+        return sData.Token(1, true, ":");
+    }
+
+    CString FormatTime(const CUser* pUser, const CString& sDefault = "") {
+        // Check if user is currently online
+        if (pUser->IsUserAttached()) {
+            return "now";
+        }
+
+        time_t last = GetTime(pUser);
+        if (last < 1) {
+            return sDefault;
+        } else {
+            char buf[1024];
+            strftime(buf, sizeof(buf) - 1, "%c", localtime(&last));
+            return buf;
+        }
+    }
+
+    void SetTimeAndIP(const CUser* pUser) {
+        CString sData =
+            CString(time(nullptr)) + ":" + GetClient()->GetRemoteIP();
+        SetNV(pUser->GetUsername(), sData);
     }
 
     const CString FormatLastSeen(const CUser* pUser,
@@ -60,13 +83,15 @@ class CLastSeenMod : public CModule {
 
         Table.AddColumn(t_s("User", "show"));
         Table.AddColumn(t_s("Last Seen", "show"));
+        Table.AddColumn(t_s("IP Address", "show"));
         Table.SetStyle(CTable::ListStyle);
 
         for (it = mUsers.begin(); it != mUsers.end(); ++it) {
             Table.AddRow();
             Table.SetCell(t_s("User", "show"), it->first);
             Table.SetCell(t_s("Last Seen", "show"),
-                          FormatLastSeen(it->second, t_s("never")));
+                          FormatTime(it->second, t_s("never")));
+            Table.SetCell(t_s("IP Address"), GetIP(it->second));
         }
 
         PutModule(Table);
@@ -84,9 +109,9 @@ class CLastSeenMod : public CModule {
 
     // Event stuff:
 
-    void OnClientLogin() override { SetTime(GetUser()); }
+    void OnClientLogin() override { SetTimeAndIP(GetUser()); }
 
-    void OnClientDisconnect() override { SetTime(GetUser()); }
+    void OnClientDisconnect() override { SetTimeAndIP(GetUser()); }
 
     EModRet OnDeleteUser(CUser& User) override {
         DelNV(User.GetUsername());
@@ -122,7 +147,8 @@ class CLastSeenMod : public CModule {
                 Row["Username"] = pUser->GetUsername();
                 Row["IsSelf"] =
                     CString(pUser == WebSock.GetSession()->GetUser());
-                Row["LastSeen"] = FormatLastSeen(pUser, t_s("never"));
+                Row["LastSeenTime"] = FormatTime(pUser, t_s("never"));
+                Row["LastSeenIP"] = GetIP(pUser);
             }
 
             return true;

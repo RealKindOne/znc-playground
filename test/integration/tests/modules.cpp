@@ -28,36 +28,6 @@ using testing::Not;
 namespace znc_inttest {
 namespace {
 
-TEST_F(ZNCTest, NotifyConnectModule) {
-    auto znc = Run();
-    auto ircd = ConnectIRCd();
-    auto client = LoginClient();
-    client.Write("znc loadmod notify_connect");
-    client.ReadUntil("Loaded module");
-
-    auto client2 = ConnectClient();
-    client2.Write("PASS :hunter2");
-    client2.Write("NICK nick");
-    client2.Write("USER user/test x x :x");
-    client.ReadUntil("NOTICE nick :*** user attached from ");
-
-    auto client3 = ConnectClient();
-    client3.Write("PASS :hunter2");
-    client3.Write("NICK nick");
-    client3.Write("USER user@identifier/test x x :x");
-    client.ReadUntil(
-        "NOTICE nick :*** user@identifier attached from ");
-    client2.ReadUntil(
-        "NOTICE nick :*** user@identifier attached from ");
-
-    client2.Write("QUIT");
-    client.ReadUntil("NOTICE nick :*** user detached from ");
-
-    client3.Close();
-    client.ReadUntil(
-        "NOTICE nick :*** user@identifier detached from ");
-}
-
 TEST_F(ZNCTest, ClientNotifyModule) {
     auto znc = Run();
     auto ircd = ConnectIRCd();

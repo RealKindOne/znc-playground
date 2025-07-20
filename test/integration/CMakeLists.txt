@@ -55,6 +55,7 @@ add_executable(inttest
 	"tests/modules/kickrejoin_test.cpp"
 	"tests/modules/keepnick_test.cpp"
 	"tests/modules/modulesonline_test.cpp"
+	"tests/modules/notifyconnect_test.cpp"
 	"tests/modules/perform_test.cpp"
 	"tests/modules/sasl_test.cpp"
 	"tests/modules/sendraw_test.cpp"

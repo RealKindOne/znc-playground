@@ -34,8 +34,21 @@ class CCertMod : public CModule {
     }
 
     void Info(const CString& line) {
+        bool bStrip = line.Token(1).Equals("strip");
         if (HasPemFile()) {
             PutModule(t_f("You have a certificate in {1}")(PemFile()));
+
+            CString sSHA1, sSHA256, sSHA512;
+            if (GetCertFingerprints(sSHA1, sSHA256, sSHA512)) {
+                if (bStrip) {
+                    sSHA1.Replace(":", "");
+                    sSHA256.Replace(":", "");
+                    sSHA512.Replace(":", "");
+                }
+                PutModule(t_f("SHA-1 fingerprint:   {1}")(sSHA1));
+                PutModule(t_f("SHA-256 fingerprint: {1}")(sSHA256));
+                PutModule(t_f("SHA-512 fingerprint: {1}")(sSHA512));
+            }
         } else {
             PutModule(t_s(
                 "You do not have a certificate. Please use the web interface "
@@ -46,12 +59,59 @@ class CCertMod : public CModule {
             }
         }
     }
+    bool GetCertFingerprints(CString& sSHA1, CString& sSHA256,
+                             CString& sSHA512) const {
+        CFile fPem(PemFile());
+        if (!fPem.Open()) {
+            return false;
+        }
+
+        CString sPemData;
+        fPem.ReadFile(sPemData);
+        fPem.Close();
+
+        BIO* bio = BIO_new_mem_buf(sPemData.data(), sPemData.size());
+        if (!bio) return false;
+
+        X509* pCert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+        BIO_free(bio);
+
+        if (!pCert) return false;
+
+        unsigned char sha1_buf[SHA_DIGEST_LENGTH];
+        unsigned int sha1_len = SHA_DIGEST_LENGTH;
+        if (X509_digest(pCert, EVP_sha1(), sha1_buf, &sha1_len)) {
+            sSHA1 = CString(reinterpret_cast<const char*>(sha1_buf), sha1_len)
+                        .Escape_n(CString::EASCII, CString::EHEXCOLON);
+        }
+
+        unsigned char sha256_buf[SHA256_DIGEST_LENGTH];
+        unsigned int sha256_len = SHA256_DIGEST_LENGTH;
+        if (X509_digest(pCert, EVP_sha256(), sha256_buf, &sha256_len)) {
+            sSHA256 =
+                CString(reinterpret_cast<const char*>(sha256_buf), sha256_len)
+                    .Escape_n(CString::EASCII, CString::EHEXCOLON);
+        }
+
+        unsigned char sha512_buf[SHA512_DIGEST_LENGTH];
+        unsigned int sha512_len = SHA512_DIGEST_LENGTH;
+        if (X509_digest(pCert, EVP_sha512(), sha512_buf, &sha512_len)) {
+            sSHA512 =
+                CString(reinterpret_cast<const char*>(sha512_buf), sha512_len)
+                    .Escape_n(CString::EASCII, CString::EHEXCOLON);
+        }
+
+        X509_free(pCert);
+        return true;
+    }
 
     MODCONSTRUCTOR(CCertMod) {
         AddHelpCommand();
         AddCommand("delete", "", t_d("Delete the current certificate"),
                    [=](const CString& sLine) { Delete(sLine); });
-        AddCommand("info", "", t_d("Show the current certificate"),
+        AddCommand("info", t_d("[strip]"),
+                   t_d("Show the current certificate. Use [strip] to remove "
+                       "colons."),
                    [=](const CString& sLine) { Info(sLine); });
     }
 

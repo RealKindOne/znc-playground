@@ -69,7 +69,8 @@ class CCryptMod : public CModule {
     CString m_sPubKey;
 
 #if OPENSSL_VERSION_NUMBER < 0X10100000L || \
-    (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x02070000fL)
+    (defined(LIBRESSL_VERSION_NUMBER) &&    \
+     LIBRESSL_VERSION_NUMBER < 0x02070000fL)
     static int DH_set0_pqg(DH* dh, BIGNUM* p, BIGNUM* q, BIGNUM* g) {
         /* If the fields p and g in dh are nullptr, the corresponding input
          * parameters MUST be non-nullptr.  q may remain nullptr.
@@ -196,11 +197,11 @@ class CCryptMod : public CModule {
     /* MODCONSTRUCTOR(CLASS) is of form "CLASS(...) : CModule(...)" */
     MODCONSTRUCTOR(CCryptMod), m_pDH(DH_new(), DH_free) {
         AddHelpCommand();
-        AddCommand("DelKey", t_d("<#chan|Nick>"),
-                   t_d("Remove a key for nick or channel"),
+        AddCommand("DelKey", t_d("<id>"),
+                   t_d("Delete encryption key by ID number"),
                    [=](const CString& sLine) { OnDelKeyCommand(sLine); });
-        AddCommand("SetKey", t_d("<#chan|Nick> <Key>"),
-                   t_d("Set a key for nick or channel"),
+        AddCommand("SetKey", t_d("<#chan|Nick|Mask> <Key>"),
+                   t_d("Set a key for nick or channel. Or mask for query."),
                    [=](const CString& sLine) { OnSetKeyCommand(sLine); });
         AddCommand("ListKeys", "", t_d("List all keys"),
                    [=](const CString& sLine) { OnListKeysCommand(sLine); });
@@ -248,13 +249,29 @@ class CCryptMod : public CModule {
         FilterOutgoing(Message);
         return CONTINUE;
     }
+    EModRet OnPrivTextMessage(CTextMessage& Message) override {
+        CNick& Nick = Message.GetNick();
+        CString sMessage = Message.GetText();
+        CString sHostmask = Nick.GetHostMask();
 
-    EModRet OnPrivMsg(CNick& Nick, CString& sMessage) override {
+        for (MCString::iterator it = BeginNV(); it != EndNV(); ++it) {
+            if (it->first.Contains("!") || it->first.Contains("@")) {
+                if (sHostmask.WildCmp(it->first, CString::CaseInsensitive)) {
+                    FilterIncoming(it->first, Nick, sMessage);
+                    Message.SetText(sMessage);
+                    return CONTINUE;
+                }
+            }
+        }
+
+        // No hostmask match. Use nick.
         FilterIncoming(Nick.GetNick(), Nick, sMessage);
+        Message.SetText(sMessage);
         return CONTINUE;
     }
-
-    EModRet OnPrivNotice(CNick& Nick, CString& sMessage) override {
+    EModRet OnPrivNoticeMessage(CNoticeMessage& Message) override {
+        CNick& Nick = Message.GetNick();
+        CString sMessage = Message.GetText();
         CString sCommand = sMessage.Token(0);
         CString sOtherPubKey = sMessage.Token(1);
 
@@ -305,6 +322,7 @@ class CCryptMod : public CModule {
         }
 
         FilterIncoming(Nick.GetNick(), Nick, sMessage);
+        Message.SetText(sMessage);
         return CONTINUE;
     }
 
@@ -388,20 +406,6 @@ class CCryptMod : public CModule {
         }
     }
 
-    void OnDelKeyCommand(const CString& sCommand) {
-        CString sTarget = sCommand.Token(1);
-
-        if (!sTarget.empty()) {
-            if (DelNV(sTarget.AsLower())) {
-                PutModule(t_f("Target [{1}] deleted")(sTarget));
-            } else {
-                PutModule(t_f("Target [{1}] not found")(sTarget));
-            }
-        } else {
-            PutModule(t_s("Usage DelKey <#chan|Nick>"));
-        }
-    }
-
     void OnSetKeyCommand(const CString& sCommand) {
         CString sTarget = sCommand.Token(1);
         CString sKey = sCommand.Token(2, true);
@@ -419,6 +423,41 @@ class CCryptMod : public CModule {
         }
     }
 
+    void OnDelKeyCommand(const CString& sCommand) {
+        CString sID = sCommand.Token(1);
+
+        if (sID.empty()) {
+            PutModule(t_s("Usage: Del <id>"));
+            return;
+        }
+
+        unsigned int uID = sID.ToUInt();
+        if (uID == 0) {
+            PutModule(t_s("Invalid ID number"));
+            return;
+        }
+
+        // Find the entry by ID
+        unsigned int uCurrentID = 1;
+        for (MCString::iterator it = BeginNV(); it != EndNV(); ++it) {
+            if (!it->first.Equals(NICK_PREFIX_KEY)) {
+                if (uCurrentID == uID) {
+                    if (DelNV(it->first)) {
+                        PutModule(t_f("Deleted entry [{1}] with ID {2}")(
+                            it->first, uID));
+                    } else {
+                        PutModule(
+                            t_f("Failed to delete entry with ID {1}")(uID));
+                    }
+                    return;
+                }
+                uCurrentID++;
+            }
+        }
+
+        PutModule(t_f("No entry found with ID {1}")(uID));
+    }
+
     void OnKeyXCommand(const CString& sCommand) {
         CString sTarget = sCommand.Token(1);
 
@@ -426,7 +465,9 @@ class CCryptMod : public CModule {
             if (DH1080_gen()) {
                 PutIRC("NOTICE " + sTarget + " :DH1080_INIT " + m_sPubKey +
                        "A");
-                PutModule(t_f("Sent my DH1080 public key to {1}, waiting for reply ...")(sTarget));
+                PutModule(t_f(
+                    "Sent my DH1080 public key to {1}, waiting for reply ...")(
+                    sTarget));
             } else {
                 PutModule(t_s("Error generating our keys, nothing sent."));
             }
@@ -472,14 +513,17 @@ class CCryptMod : public CModule {
 
     void OnListKeysCommand(const CString& sCommand) {
         CTable Table;
-        Table.AddColumn(t_s("Target", "listkeys"));
+        Table.AddColumn(t_s("ID", "listkeys"));
+        Table.AddColumn(t_s("Channel/Hostmask", "listkeys"));
         Table.AddColumn(t_s("Key", "listkeys"));
         Table.SetStyle(CTable::ListStyle);
 
+        unsigned int uID = 1;
         for (MCString::iterator it = BeginNV(); it != EndNV(); ++it) {
             if (!it->first.Equals(NICK_PREFIX_KEY)) {
                 Table.AddRow();
-                Table.SetCell(t_s("Target", "listkeys"), it->first);
+                Table.SetCell(t_s("ID", "listkeys"), CString(uID++));
+                Table.SetCell(t_s("Channel/Hostmask", "listkeys"), it->first);
                 Table.SetCell(t_s("Key", "listkeys"), it->second);
             }
         }

@@ -114,6 +114,13 @@ class CPerform : public CModule {
 
         if (sPerf.Left(1) == "/") sPerf.LeftChomp();
 
+        // Some clients require "/raw" or "/quote", not ZNC.
+        // Remove them if someone tries to add them.
+        if ((sPerf.Token(0).Equals("raw")) ||
+            (sPerf.Token(0).Equals("quote"))) {
+            sPerf = sPerf.Token(1, true);
+        }
+
         if (sPerf.Token(0).Equals("MSG")) {
             sPerf = "PRIVMSG " + sPerf.Token(1, true);
         }
@@ -130,6 +137,22 @@ class CPerform : public CModule {
 
     bool OnLoad(const CString& sArgs, CString& sMessage) override {
         GetNV("Perform").Split("\n", m_vPerform, false);
+
+        // Clean up existing commands that may have quote/raw prefixes
+        bool bNeedsSave = false;
+        for (size_t i = 0; i < m_vPerform.size(); i++) {
+            CString sOriginal = m_vPerform[i];
+            CString sProcessed = ParsePerform(sOriginal);
+
+            if (sProcessed != sOriginal) {
+                m_vPerform[i] = sProcessed;
+                bNeedsSave = true;
+            }
+        }
+
+        if (bNeedsSave) {
+            Save();
+        }
 
         return true;
     }
@@ -190,3 +213,4 @@ void TModInfo<CPerform>(CModInfo& Info) {
 NETWORKMODULEDEFS(
     CPerform,
     t_s("Keeps a list of commands to be executed when ZNC connects to IRC."))
+

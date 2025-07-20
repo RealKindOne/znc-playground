@@ -47,6 +47,7 @@ add_executable(inttest
 	"tests/scripting.cpp"
 	"tests/modules/autocycle_test.cpp"
 	"tests/modules/autoattach_test.cpp"
+	"tests/modules/ctcpflood_test.cpp"
 	"tests/modules/cert_test.cpp"
 	"tests/modules/chansaver_test.cpp"
 	"tests/modules/clearbufferonmsg_test.cpp"

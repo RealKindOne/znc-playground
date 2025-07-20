@@ -56,6 +56,7 @@ add_executable(inttest
 	"tests/modules/keepnick_test.cpp"
 	"tests/modules/modulesonline_test.cpp"
 	"tests/modules/perform_test.cpp"
+	"tests/modules/sasl_test.cpp"
 	"tests/modules/sendraw_test.cpp"
 	"tests/modules/stickychan_test.cpp"
 	"tests/modules/watch_test.cpp"
